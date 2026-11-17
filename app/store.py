@@ -71,6 +71,25 @@ CREATE TABLE IF NOT EXISTS totals (
 CREATE TABLE IF NOT EXISTS manifests (
     batch_id TEXT PRIMARY KEY, json TEXT NOT NULL
 );
+-- M8 跨批次连续状态：每个 (table, pk) 一行，全局唯一，跨批次只增不减
+CREATE TABLE IF NOT EXISTS continuity_states (
+    table_name TEXT NOT NULL, pk TEXT NOT NULL,
+    version INTEGER NOT NULL, op TEXT NOT NULL, amount TEXT, qty INTEGER,
+    event_time_utc TEXT NOT NULL, row_ref TEXT NOT NULL,
+    first_batch TEXT NOT NULL, latest_batch TEXT NOT NULL,
+    late INTEGER NOT NULL DEFAULT 0, payload_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (table_name, pk)
+);
+-- M8 全局已采信签名索引：同一变更跨日/交接再次出现时在这里命中
+CREATE TABLE IF NOT EXISTS continuity_signatures (
+    signature TEXT PRIMARY KEY, row_ref TEXT NOT NULL,
+    table_name TEXT NOT NULL, pk TEXT NOT NULL, batch_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cont_sig_key
+    ON continuity_signatures(table_name, pk);
+CREATE TABLE IF NOT EXISTS continuity_totals (
+    key TEXT PRIMARY KEY, value TEXT NOT NULL
+);
 """
 
 
@@ -139,7 +158,8 @@ class Store:
     # ---------- 一次运行落库（单事务替换） ----------
     def save_run(self, *, batch: dict, inputs: list[dict], events: list[dict],
                  snapshots: list[dict], watermarks: list[dict], stages: list[dict],
-                 totals: dict, manifest: dict) -> None:
+                 totals: dict, manifest: dict,
+                 continuity: dict | None = None) -> None:
         with self.connect() as conn:
             for table in ("inputs", "events", "snapshots", "watermarks", "stages", "totals"):
                 conn.execute(f"DELETE FROM {table} WHERE batch_id=?", (batch["batch_id"],))
@@ -198,6 +218,8 @@ class Store:
                 "INSERT INTO manifests (batch_id,json) VALUES (?,?) "
                 "ON CONFLICT(batch_id) DO UPDATE SET json=excluded.json",
                 (batch["batch_id"], json.dumps(manifest, ensure_ascii=False, default=str)))
+            if continuity is not None:
+                self._write_continuity(conn, continuity, batch["batch_id"])
             conn.execute(
                 """INSERT INTO batches (batch_id,batch_key,run_id,source,status,created_at,
                         finished_at,input_digest,watermark_utc,max_event_time,params_json,
@@ -215,6 +237,59 @@ class Store:
                  json.dumps(batch.get("params", {}), ensure_ascii=False),
                  batch.get("note", ""), batch.get("replay_of")))
 
+
+    # ---------- M8 跨批次连续状态 ----------
+    def _write_continuity(self, conn, continuity: dict, batch_id: str) -> None:
+        """与批次结果同事务整体替换：先全删再全插，失败随外层一起回滚。
+
+        用「整表重写」而不是逐键 upsert，保证同一份输入重跑字节级收敛：
+        本批没触及的键仍在 ``state_rows`` 里（合并阶段已原样带回），不会丢。
+        """
+        conn.execute("DELETE FROM continuity_states")
+        conn.execute("DELETE FROM continuity_signatures")
+        conn.execute("DELETE FROM continuity_totals")
+        for row in continuity["state_rows"]:
+            conn.execute(
+                """INSERT INTO continuity_states (table_name,pk,version,op,amount,qty,
+                    event_time_utc,row_ref,first_batch,latest_batch,late,payload_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (row["table"], row["pk"], row["version"], row["op"],
+                 row.get("amount"), row.get("qty"), row["event_time"], row["row_ref"],
+                 row["first_batch"], row["latest_batch"], 1 if row.get("late") else 0,
+                 json.dumps(row.get("payload", {}), ensure_ascii=False, default=str)))
+        for sig, ref in continuity["signatures"].items():
+            parts = sig.split("|")
+            table = parts[0] if parts else ""
+            pk = parts[1] if len(parts) > 1 else ""
+            conn.execute(
+                """INSERT INTO continuity_signatures (signature,row_ref,table_name,pk,batch_id)
+                   VALUES (?,?,?,?,?)""",
+                (sig, ref, table, pk, batch_id))
+        for key, value in continuity["counters"].items():
+            conn.execute(
+                "INSERT INTO continuity_totals(key,value) VALUES (?,?)",
+                (key, str(value)))
+
+    def load_continuity_states(self) -> list[dict]:
+        rows = self._all(
+            "SELECT * FROM continuity_states ORDER BY table_name, pk", ())
+        for r in rows:
+            r["payload"] = json.loads(r.pop("payload_json") or "{}")
+            r["amount"] = None if r["amount"] is None else Decimal(r["amount"])
+            r["late"] = bool(r["late"])
+        return rows
+
+    def load_continuity_signatures(self) -> dict[str, str]:
+        rows = self._all("SELECT signature, row_ref FROM continuity_signatures", ())
+        return {r["signature"]: r["row_ref"] for r in rows}
+
+    def load_continuity_signature_rows(self) -> list[dict]:
+        return self._all(
+            "SELECT signature, row_ref, table_name, pk FROM continuity_signatures", ())
+
+    def load_continuity_counters(self) -> dict:
+        rows = self._all("SELECT key, value FROM continuity_totals", ())
+        return {r["key"]: r["value"] for r in rows}
 
     # ---------- 快照（可重复物化） ----------
     def replace_snapshot(self, batch_id: str, rows: list[dict], totals: dict) -> None:

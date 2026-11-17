@@ -16,6 +16,8 @@ from ..m3_dedup import service as m3_service
 from ..m4_watermark import watermark as wm_mod
 from ..m5_snapshot import materialize, service as m5_service
 from ..m5_snapshot import apply as apply_mod
+from ..m8_continuity import service as m8_service
+from ..m8_continuity import view as m8_view
 from . import history, resume, state
 
 
@@ -23,8 +25,13 @@ COUNT_KEYS = ("files", "raw_lines", "blank_lines", "header_repeat", "applied",
               "duplicates", "conflicts", "quarantine", "late_events",
               "on_time_events", "max_behind_minutes", "keys_total",
               "snapshot_keys", "active_keys", "tombstone_keys",
-              "pending_only_keys", "pending_events", "drift_keys")
-AMOUNT_KEYS = ("amount_snapshot", "amount_pending", "amount_drift", "amount_applied")
+              "pending_only_keys", "pending_events", "drift_keys",
+              "continuity_keys", "continuity_active", "continuity_tombstone",
+              "continuity_pending", "continuity_applied", "continuity_kept",
+              "continuity_created", "continuity_updated",
+              "cross_duplicate", "cross_order", "cross_conflict")
+AMOUNT_KEYS = ("amount_snapshot", "amount_pending", "amount_drift", "amount_applied",
+               "continuity_amount")
 TIME_KEYS = ("watermark_utc", "max_event_time", "snapshot_as_of")
 
 
@@ -135,6 +142,21 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
                          note=f"活跃 {snapshot.counters['active_keys']} / 墓碑 "
                               f"{snapshot.counters['tombstone_keys']}"))
 
+    # ---- M8 跨批次连续状态（日切重叠 / 早班交接的裁决在这里落锤）----
+    step = time.perf_counter()
+    continuity = m8_service.apply_continuity(
+        store, incoming=classified.applied, batch_id=batch_id)
+    cont = continuity["counters"]
+    cont_summary = m8_view.summarize(continuity["rows"], marks.final)
+    stages.append(_stage(
+        "continuity", in_count=len(classified.applied),
+        out_count=cont["continuity_applied"],
+        quarantine=cont["cross_duplicate"] + cont["cross_order"]
+        + cont["cross_conflict"], elapsed_ms=_ms(step),
+        note=f"跨批次重复 {cont['cross_duplicate']} / 冲突 "
+             f"{cont['cross_order'] + cont['cross_conflict']} / 保留既有键 "
+             f"{cont['keys_kept']}"))
+
     totals = {
         "files": counts["files"],
         "raw_lines": counts["data_lines"],
@@ -163,13 +185,26 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
         "max_event_time": max_event,
         "reconcile_ok": 1 if all(r["ok"] for r in reconcile) else 0,
         "reconcile_json": json.dumps(_jsonable(reconcile), ensure_ascii=False),
+        # ---- M8 连续结果（跨日重叠只计一次，既有键不丢失）----
+        "continuity_keys": cont_summary["keys_total"],
+        "continuity_active": cont_summary["active_keys"],
+        "continuity_tombstone": cont_summary["tombstone_keys"],
+        "continuity_pending": cont_summary["pending_keys"],
+        "continuity_applied": cont["continuity_applied"],
+        "continuity_kept": cont["keys_kept"],
+        "continuity_created": cont["keys_created"],
+        "continuity_updated": cont["keys_updated"],
+        "cross_duplicate": cont["cross_duplicate"],
+        "cross_order": cont["cross_order"],
+        "cross_conflict": cont["cross_conflict"],
+        "continuity_amount": cont_summary["amount_applied"],
     }
 
     finished_at = _now_iso()
     elapsed = _ms(clock)
     stages.append(_stage("export", in_count=len(snapshot.rows),
                          out_count=len(snapshot.rows), quarantine=0, elapsed_ms=0,
-                         note="证据行 / 隔离 / 冲突 / 快照 / 清单"))
+                         note="证据行 / 隔离 / 冲突 / 快照 / 连续结果 / 清单"))
 
     batch = {
         "batch_id": batch_id, "batch_key": key, "run_id": run_id,
@@ -188,7 +223,19 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
                 for s in stages],
         counters={k: str(v) for k, v in totals.items() if k != "reconcile_json"},
         watermark=_iso(marks.final) or "", max_event_time=max_event or "",
-        reconcile=_jsonable(reconcile))
+        reconcile=_jsonable(reconcile),
+        continuity={
+            "keys_total": cont_summary["keys_total"],
+            "active_keys": cont_summary["active_keys"],
+            "tombstone_keys": cont_summary["tombstone_keys"],
+            "pending_keys": cont_summary["pending_keys"],
+            "amount_applied": str(cont_summary["amount_applied"]),
+            "cross_duplicate": cont["cross_duplicate"],
+            "cross_order": cont["cross_order"],
+            "cross_conflict": cont["cross_conflict"],
+            "keys_kept": cont["keys_kept"],
+            "rule": "重叠按业务版本序裁决：同签名不新增、低版本不覆盖、既有键不丢失",
+        })
 
     snapshot_rows = [{**row, "amount": None if row["amount"] is None else str(row["amount"])}
                      for row in snapshot.rows]
@@ -198,7 +245,10 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
         events=[n.to_row() for n in classified.all_rows],
         snapshots=snapshot_rows,
         watermarks=wm_mod.series_rows(marks, iso),
-        stages=stages, totals=totals, manifest=doc)
+        stages=stages, totals=totals, manifest=doc,
+        continuity={"state_rows": continuity["state_rows"],
+                    "signatures": continuity["signatures"],
+                    "counters": cont})
 
     return {
         "status": "done",
@@ -221,6 +271,11 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
         },
         "inputs": [_input_row(f) for f in bundle.files],
         "elapsed_ms": elapsed,
+        "continuity": {
+            "counters": cont,
+            "summary": {k: (str(v) if isinstance(v, Decimal) else v)
+                        for k, v in cont_summary.items() if k != "rows"},
+        },
     }
 
 
@@ -254,6 +309,11 @@ def _replay_payload(store, replay: dict, key: str, run_id: str,
                       "on_time": int(totals.get("on_time_events", 0) or 0)},
         "inputs": store.load_inputs(replay["batch_id"]),
         "elapsed_ms": 0,
+        "continuity": {
+            "counters": {k: int(v) for k, v in store.load_continuity_counters().items()
+                         if str(v).lstrip("-").isdigit()},
+            "summary": {"keys_total": len(store.load_continuity_states())},
+        },
     }
 
 

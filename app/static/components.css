@@ -248,14 +248,16 @@ table.grid tr.is-dim td {
 
 .state-duplicate,
 .state-warn,
-.state-pending {
+.state-pending,
+.state-cross_duplicate {
   color: var(--warn);
 }
 
 .state-conflict,
 .state-quarantine,
 .state-bad,
-.state-tombstone {
+.state-tombstone,
+.state-cross_conflict {
   color: var(--bad);
 }
 

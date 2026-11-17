@@ -25,6 +25,7 @@ NAV = (
     ("/schema", "契约", "schema"),
     ("/conflicts", "冲突隔离", "conflicts"),
     ("/snapshot", "快照", "snapshot"),
+    ("/continuity", "连续结果", "continuity"),
     ("/batches", "批次", "batches"),
 )
 
@@ -33,6 +34,8 @@ ROW_CLASS_LABELS = {
     "duplicate": "重复",
     "conflict": "冲突",
     "quarantine": "隔离",
+    "cross_duplicate": "跨批重复",
+    "cross_conflict": "跨批冲突",
 }
 SNAPSHOT_LABELS = {"active": "活跃", "tombstone": "墓碑", "pending": "待定"}
 STATUS_LABELS = {"done": "完成", "failed": "失败", "running": "运行中", "stale": "已拒绝"}
@@ -95,7 +98,7 @@ def setup(app) -> None:
         fields=config.FIELDS,
         aliases=config.ALIASES,
         source_labels=config.SOURCE_LABELS,
-        source_keys=("all", "main", "v1_csv", "late"),
+        source_keys=("all", "main", "v1_csv", "late", "handoff"),
         money_unit=config.MONEY_UNIT,
         window_note=config.WINDOW_NOTE,
         late_window=config.LATE_WINDOW_MINUTES,

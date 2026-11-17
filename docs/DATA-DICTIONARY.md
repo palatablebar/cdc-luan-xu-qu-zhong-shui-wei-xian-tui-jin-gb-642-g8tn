@@ -91,3 +91,26 @@
 `watermark_utc`、`max_event_time_utc`、`stages[]`、`counters`、`reconcile`。
 
 同一 `input_digest` 重跑命中同一 `batch_key`，返回原批次、不新增行。
+
+## 10 跨批次连续状态（M8，日切重叠 / 早班交接）
+
+两份日增量导出带最近两小时重叠、早班交接再补一段时，同一业务变更会在不同日期各形成
+一份正式结果。M8 在批内折叠之外维护一份**全局连续结果**，裁决只看业务版本序，不看导出新旧：
+
+| 情形 | 判定原因码 | row_class | 连续结果怎么变 |
+|---|---|---|---|
+| 同签名变更在新导出里再次出现 | `B_CROSS_DUP` | `cross_duplicate` | 跳过，不新增、不覆盖，只承认首见 |
+| 同键同版本但内容不同 | `B_CROSS_CONFLICT` | `cross_conflict` | 新到的不进连续状态，保留先前值 |
+| 低版本（含低版本删除）晚于已确认高版本/墓碑 | `B_CROSS_ORDER` | `cross_conflict` | 迟到旧值不顶掉已确认状态，墓碑不复活 |
+| 更高版本 upsert/delete，或首见键 | —（正常采信） | `applied` | 覆盖该键；delete 写墓碑；首见键新建 |
+| 本批未触及的既有键 | `S_STATE_KEPT`（仅文案） | — | 原样保留，连续结果只增不减 |
+
+- **存储**：`continuity_states`（每个 `(table,pk)` 全局唯一一行，记 `first_batch`/
+  `latest_batch`）+ `continuity_signatures`（全局已采信签名索引）+ `continuity_totals`。
+- **事务**：连续状态与批次行在 `save_run` 同一事务内整表重写；任一步失败整体回滚，
+  上一份连续结果与批次结果都保持可查询。同输入重跑命中 `batch_key` 走幂等重放，不新增。
+- **视图口径**：与 M5 同一套半开区间，`event_time ≤ as_of` 进快照、`(as_of,+inf)` 待定；
+  页面 `/continuity`、`GET /api/continuity`、`/api/export/continuity.csv|json` 读同一份视图行。
+- **连续金额**：墓碑与空金额不计，Decimal 精确累加；连续键账与金额账在导出与页面同时对账。
+- **陈旧导出**：最大 `event_time` 落后于已持久化水位仍按 `C_STALE_BATCH` 409 拒绝，
+  拒绝发生在连续状态写入之前，旧导出碰不到任何既有状态。

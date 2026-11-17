@@ -36,6 +36,7 @@ def api_import(payload: dict | None = None, ctx: Ctx = Depends(get_ctx)) -> dict
         "all_balanced": result["all_balanced"],
         "watermark": result["watermark"],
         "inputs": result["inputs"],
+        "continuity": result.get("continuity"),
     }
 
 

@@ -30,6 +30,37 @@
   </aside>
 
   <div class="stack">
+    {% if continuity %}
+    <section class="panel">
+      <div class="panel-head">
+        <h2>连续结果（跨批次，页面与导出同源）</h2>
+        <p class="panel-sub">{{ continuity.summary.keys_total | num }} 键 · 金额 {{ continuity.summary.amount_applied | dec }}</p>
+      </div>
+      <div class="panel-body tight">
+        <div class="table-wrap">
+          <table class="grid">
+            <thead><tr><th>连续键</th><th class="num">活跃</th><th class="num">墓碑</th><th class="num">待定</th><th class="num">跨批重复</th><th class="num">跨批冲突</th><th class="num">保留既有键</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><a class="mono" href="/continuity">{{ continuity.summary.keys_total | num }}</a></td>
+                <td class="num is-ok">{{ continuity.summary.active_keys | num }}</td>
+                <td class="num is-bad">{{ continuity.summary.tombstone_keys | num }}</td>
+                <td class="num is-warn">{{ continuity.summary.pending_keys | num }}</td>
+                <td class="num is-warn">{{ continuity.counters.cross_duplicate | num }}</td>
+                <td class="num is-bad">{{ continuity.counters.cross_order | num }} / {{ continuity.counters.cross_conflict | num }}</td>
+                <td class="num">{{ continuity.counters.keys_kept | num }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="actions" style="margin-top:8px">
+          <a class="btn" href="/api/export/continuity.csv">连续 CSV</a>
+          <a class="btn" href="/api/export/continuity.json">连续 JSON</a>
+          <a class="btn btn-ghost" href="/continuity">连续结果页</a>
+        </div>
+      </div>
+    </section>
+    {% endif %}
     <section class="panel">
       <div class="panel-head">
         <h2>对账</h2>

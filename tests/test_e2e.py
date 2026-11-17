@@ -25,7 +25,8 @@ def test_full_pipeline_matches_expected(run):
     assert run["all_balanced"] is True
     assert [row["name"] for row in run["reconciliation"]] == ["行账", "键账", "快照账", "金额账"]
     assert [stage["stage"] for stage in run["stages"]] == [
-        "ingest", "contract", "dedup", "watermark", "snapshot", "export"]
+        "ingest", "contract", "dedup", "watermark", "snapshot",
+        "continuity", "export"]
 
 
 def test_all_pages_return_200(client):

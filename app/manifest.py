@@ -28,7 +28,8 @@ def digest_parts(parts: list[str]) -> str:
 def build(*, run_id: str, batch_id: str, batch_key: str, settings, source: str,
           input_digest: str, inputs: list[dict], params: dict, started_at: str,
           finished_at: str, elapsed_ms: int, stages: list[dict], counters: dict,
-          watermark: str, max_event_time: str, reconcile: dict) -> dict:
+          watermark: str, max_event_time: str, reconcile: dict,
+          continuity: dict | None = None) -> dict:
     """清单是一份可独立复核的证据：输入摘要 + 参数 + 计数 + 对账身份。"""
     return {
         "run_id": run_id,
@@ -51,5 +52,6 @@ def build(*, run_id: str, batch_id: str, batch_key: str, settings, source: str,
         "stages": stages,
         "counters": counters,
         "reconcile": reconcile,
+        "continuity": continuity or {},
         "replayable": "同一 input_digest 重跑命中 batch_key，不新增行",
     }

@@ -135,6 +135,23 @@ REASONS = {
     "C_STALE_BATCH": _r(
         "C_STALE_BATCH", ERROR, "batches",
         "输入最大 event_time 低于已持久化水位，按陈旧批次拒绝", "确认导出端时钟与文件版本"),
+    # ---- M8 跨批次连续状态（日切重叠 / 早班交接）----
+    "B_CROSS_DUP": _r(
+        "B_CROSS_DUP", WARN, "continuity",
+        "同一变更在跨日/交接导出中再次出现，已按重复跳过",
+        "连续状态只承认首见版本，重跑不新增、不覆盖已确认状态"),
+    "B_CROSS_ORDER": _r(
+        "B_CROSS_ORDER", ERROR, "continuity",
+        "低版本变更晚于已确认的高版本/墓碑到达，未顶掉既有状态",
+        "版本号必须大于已确认版本才允许更新，墓碑后需更高版本才能复活"),
+    "B_CROSS_CONFLICT": _r(
+        "B_CROSS_CONFLICT", ERROR, "continuity",
+        "同一键同一版本在不同导出中内容不同，两组都不进连续状态",
+        "回源确认哪条为准，再用更高版本导出纠正"),
+    "S_STATE_KEPT": _r(
+        "S_STATE_KEPT", INFO, "continuity",
+        "本批未出现的既有键原样保留，连续结果不丢失",
+        "连续状态只增不减，键保留直到更高版本显式覆盖"),
     # ---- M7 导出 ----
     "X_EMPTY_SELECTION": _r(
         "X_EMPTY_SELECTION", WARN, "export",

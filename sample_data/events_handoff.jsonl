@@ -1,0 +1,7 @@
+# cdc-export v2 rows=6 charset=utf-8 来源=早班交接导出（含最近两小时重叠）
+{"table":"orders","pk":"1007","version":2,"op":"upsert","event_time":"2026-11-15T08:50:00Z","schema":"v2","payload":{"status":"已支付","amount":"15.00"}}
+{"table":"orders","pk":"1007","version":3,"op":"upsert","event_time":"2026-11-15T09:05:00Z","schema":"v2","payload":{"status":"已发货","amount":"15.00"}}
+{"table":"orders","pk":"1012","version":2,"op":"upsert","event_time":"2026-11-15T09:06:00Z","schema":"v2","payload":{"status":"已支付","amount":"999.00"}}
+{"table":"orders","pk":"3002","version":1,"op":"upsert","event_time":"2026-11-15T09:07:00Z","schema":"v2","payload":{"status":"新建","amount":"77.00"}}
+{"table":"orders","pk":"1006","version":2,"op":"upsert","event_time":"2026-11-15T09:08:00Z","schema":"v2","payload":{"status":"对账纠正","amount":"60.00"}}
+{"table":"shipments","pk":"4002","version":2,"op":"upsert","event_time":"2026-11-15T09:09:00Z","schema":"v2","payload":{"status":"已签收","qty":"3"}}

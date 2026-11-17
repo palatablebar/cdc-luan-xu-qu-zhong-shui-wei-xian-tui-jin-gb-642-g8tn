@@ -15,8 +15,10 @@
   `C_TOMBSTONE_RESURRECT`，两条都不应用；
 - 水位线 = 已应用事件最大 `event_time` − 10 分钟，严格小于才记迟到，迟到**仍然应用**；
 - 快照按 `event_time ≤ as_of` 物化，`as_of` 之后的事件留待定窗口，一并给出合计；
+- 跨批次连续状态：日切重叠与早班交接按**业务版本序**裁决，同签名跨批不重复计数、
+  迟到旧值不顶掉已确认状态、本批未出现的既有键不丢失，页面与导出读同一份连续结果；
 - 批次键 = 输入摘要 + 规则版本 + 参数，同一输入重跑命中批次、不新增行；
-- 导出事件证据、隔离区、冲突表、快照 CSV/JSON 与运行清单（含 `run_id` 与每个输入的 sha256）。
+- 导出事件证据、隔离区、冲突表、快照、连续结果与运行清单（含 `run_id` 与每个输入的 sha256）。
 
 ## 功能模块
 
@@ -29,6 +31,7 @@
 | M5 快照物化 | 按水位物化快照，看待定键 | `POST /api/snapshot`、页面 `/snapshot` | `apply.py` `materialize.py` |
 | M6 批次续跑 | 查历史、看清单、续跑与重跑 | `GET /api/batches`、页面 `/batches` | `state.py` `resume.py` `history.py` |
 | M7 审计导出 | 下载证据行、隔离、冲突、快照与清单 | `GET /api/export/*` | `csv_out.py` `json_out.py` `manifest_out.py` |
+| M8 连续状态 | 看跨批次连续结果与重叠拦截，导出连续 CSV/JSON | `GET /api/continuity`、页面 `/continuity` | `merge.py` `view.py` `service.py` |
 
 模块内统一是 `handler.py`（入口）+ `service.py`（编排）+ 两个纯规则/读写文件；
 定义写在 `docs/DATA-DICTIONARY.md`，坑与测试映射写在 `docs/DEPTH.md`。
@@ -39,7 +42,10 @@
 2. **冲突不猜**：同键同版本两种内容 → 整组不应用；删除后到达的低版本 upsert 不复活；
 3. **水位单调**：`max(event_time) − 10min`，只由已应用事件推进，迟到只标记不丢弃；
 4. **快照半开**：`[-, as_of]` 进快照、`(as_of, +inf)` 待定，两窗口不重叠；
-5. **金额 Decimal**：`0.01` 量化、`ROUND_HALF_UP`，合计可独立复算。
+5. **金额 Decimal**：`0.01` 量化、`ROUND_HALF_UP`，合计可独立复算；
+6. **重叠按版本序裁决**：跨日/交接导出里，同签名变更不重复计数（`B_CROSS_DUP`）、
+   低版本旧值不覆盖已确认状态（`B_CROSS_ORDER`）、同版本异内容两组都不进连续状态
+   （`B_CROSS_CONFLICT`），既有键只增不减；连续状态与批次同事务提交，失败回滚。
 
 ## 启动
 
@@ -65,7 +71,7 @@ docker compose down -v             # 连数据库卷一起删
 | 方法 | 路径 | 作用 |
 |---|---|---|
 | GET | `/api/health` | 健康检查与水位数 |
-| POST | `/api/events/import` | 采信（`source=all/main/v1_csv/late`） |
+| POST | `/api/events/import` | 采信（`source=all/main/v1_csv/late/handoff`） |
 | GET | `/api/events` | 事件流（可按分类、表过滤） |
 | GET | `/api/schema` | 契约、别名、版本 |
 | POST | `/api/schema/preview` | 单条试归一 |
@@ -75,26 +81,28 @@ docker compose down -v             # 连数据库卷一起删
 | GET | `/api/batches`、`/api/batches/{id}`、`/api/batches/{id}/manifest` | 批次与清单 |
 | POST | `/api/batches/{id}/resume` | 续跑 |
 | GET | `/api/export/{events,quarantine,conflicts,snapshot}.csv` | 证据导出 |
-| GET | `/api/export/{snapshot,manifest}.json` | 快照与运行清单 |
+| GET | `/api/export/{snapshot,manifest,continuity}.json` | 快照、运行清单与连续结果 |
+| GET | `/api/export/continuity.csv` | 连续结果 CSV（含首见/更新批次） |
+| GET | `/api/continuity` | 跨批次连续结果与重叠拦截计数 |
 
-页面共 6 个：`/`、`/events`、`/schema`、`/conflicts`、`/snapshot`、`/batches`。
+页面共 7 个：`/`、`/events`、`/schema`、`/conflicts`、`/snapshot`、`/continuity`、`/batches`。
 
 ## 目录
 
 ```text
 app/
   main.py config.py errors.py reasons.py manifest.py store.py web.py bootstrap.py
-  modules/m1_events/ … m7_export/        # 每模块 handler + service + 2 个规则文件
+  modules/m1_events/ … m8_continuity/     # 每模块 handler + service + 纯规则文件
   templates/                             # base + 6 页
   static/                                # theme / layout / components + 3 个 js
 docs/  DEPTH.md  DATA-DICTIONARY.md  RUNBOOK.md
-sample_data/  events_main.jsonl  events_v1_gb.csv  events_late.jsonl  events_clean.jsonl  schema_contract.json
-tests/  test_m1_events.py … test_m7_export.py  test_e2e.py  test_invariants.py  fixtures/
+sample_data/  events_main.jsonl  events_v1_gb.csv  events_late.jsonl  events_handoff.jsonl  events_clean.jsonl  schema_contract.json
+tests/  test_m1_events.py … test_m8_continuity.py  test_e2e.py  test_invariants.py  fixtures/
 ```
 
 ## 已知不覆盖
 
 - 只处理文件型导出，不连接 Kafka / Debezium 这类在线流；
 - schema 演进只覆盖列改名与新增字段，不支持类型收窄；
-- 同一批次内不做跨批次键级合并（每个批次独立折叠，快照只反映当前批次）；
+- 批内快照仍只反映当前批次；跨批次的连续口径看 M8 连续结果（`/continuity`）；
 - 事件级事务边界（同一事务的多个变更原子可见）未建模。

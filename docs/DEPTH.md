@@ -1,6 +1,6 @@
 # 深度登记 cdcwater（CDC 乱序去重与水位线推进）
 
-- 规模：中型（7 个功能模块 / 7 个页面 / 79 条测试）
+- 规模：中型（8 个功能模块 / 8 个页面 / 94 条测试）
 - 核心规则一：**版本序折叠 + 墓碑**——每个 `(table, pk)` 按 `version` 升序应用，`delete` 写墓碑；
   同键同版本出现两种内容整组不应用（`C_VERSION_CONFLICT`），删除之后到达的低版本 upsert
   不复活（`C_TOMBSTONE_RESURRECT`），删除之前到达的低版本照常应用后被覆盖。
@@ -22,6 +22,7 @@
 | M5 快照物化 | 按水位物化快照，看待定键与三条对账 | POST /api/snapshot、页面 /snapshot | `app/modules/m5_snapshot/apply.py` `app/modules/m5_snapshot/materialize.py` `app/modules/m5_snapshot/service.py` | `tests/test_m5_snapshot.py` |
 | M6 批次续跑 | 查历史、看运行清单、续跑与重跑 | GET /api/batches、POST /api/batches/{id}/resume、页面 /batches | `app/modules/m6_batches/state.py` `app/modules/m6_batches/resume.py` `app/modules/m6_batches/history.py` `app/modules/m6_batches/service.py` | `tests/test_m6_batches.py` |
 | M7 审计导出 | 下载证据行、隔离、冲突、快照与清单 | GET /api/export/* | `app/modules/m7_export/csv_out.py` `app/modules/m7_export/json_out.py` `app/modules/m7_export/manifest_out.py` `app/modules/m7_export/service.py` | `tests/test_m7_export.py` |
+| M8 跨批次连续状态 | 看连续结果、跨批重复/冲突拦截与连续对账，导出连续 CSV/JSON | GET /api/continuity、GET /api/export/continuity.*、页面 /continuity | `app/modules/m8_continuity/merge.py` `app/modules/m8_continuity/view.py` `app/modules/m8_continuity/service.py` | `tests/test_m8_continuity.py` |
 
 端到端：`tests/test_e2e.py` 覆盖「样例 → 采信 → 归一 → 去重冲突 → 水位 → 快照 → 导出 → 页面」，
 含 4xx 失败输入与幂等重跑；`tests/test_invariants.py` 覆盖行账、键账、金额、幂等、迟到互补。
@@ -41,6 +42,7 @@
 | TRAP-19 | 一条事件同时像「重复」又像「冲突」，坏行还互相重复 | 按代码书写顺序覆盖，结果随遍历顺序变 | 优先级 `quarantine > conflict > duplicate > apply`，各桶由集合运算得出 | `app/modules/m3_dedup/service.py` | `tests/test_m3_dedup.py::test_conflict_beats_duplicate`、`tests/test_m3_dedup.py::test_priority_independent_of_input_order` |
 | TRAP-23 | 事件 `event_time` 恰好等于水位线 / 恰好等于 `as_of` | 两端都算，重复计入或漏计 | 迟到用半开 `[水位线, +inf)`；快照含 `as_of`、待定窗口 `(as_of, +inf)` 半开 | `app/modules/m4_watermark/watermark.py`、`app/modules/m5_snapshot/materialize.py` | `tests/test_m4_watermark.py::test_boundary_equal_watermark_is_not_late`、`tests/test_m5_snapshot.py::test_boundary_event_at_as_of_included_once` |
 | TRAP-26 | 拿上一轮旧导出再跑一次（最大事件 06:00 < 已持久化水位 08:52） | 无条件覆盖，水位回退、快照变旧 | 陈旧批次直接 409 `C_STALE_BATCH`，已落库结果不动 | `app/modules/m6_batches/resume.py`、`app/modules/m6_batches/state.py` | `tests/test_m6_batches.py::test_stale_input_rejected` |
+| TRAP-27 | 两份日增量带两小时重叠、早班交接再补一段，同一变更跨日各成一份正式结果 | 按导出批次各计一次，跨日重复计数；迟到旧值顶掉已确认状态 | M8 全局连续状态：同签名 `B_CROSS_DUP` 不新增、低版本 `B_CROSS_ORDER`/同版本异内容 `B_CROSS_CONFLICT` 不覆盖、既有键不丢失，与批次同事务提交 | `app/modules/m8_continuity/merge.py`、`app/store.py` | `tests/test_m8_continuity.py` |
 
 ## 对账规则
 
@@ -69,11 +71,17 @@
   - `tests/test_invariants.py::test_idempotent_rerun_keeps_rows_and_totals`（幂等重跑）；
   - `tests/test_m4_watermark.py::test_watermark_monotonic`（水位单调）；
   - `tests/test_m5_snapshot.py::test_rebuild_is_idempotent`（物化可重复）。
+- M8 连续状态不变量（`tests/test_m8_continuity.py`）：
+  - 同签名跨批只计一次（`test_overlap_same_change_counted_once`）；
+  - 高版本采信、低版本不覆盖、墓碑不复活（`test_late_low_version_does_not_override_confirmed_state` 等）；
+  - 本批未出现的既有键保留、连续键只增不减（`test_keys_absent_from_batch_are_kept`）；
+  - 重跑幂等不新增（`test_rerun_handoff_is_idempotent`）；
+  - 失败回滚、上一份结果可查（`test_failed_run_rolls_back_continuity`）；
+  - 页面/API/CSV/JSON 同源同数（`test_page_api_and_export_share_one_result`）。
 
 ## 已知不覆盖
 
 - 只处理文件型导出，不接 Kafka / Debezium 在线流；水位线是「批内推进」，不是全局流进度。
-- 不做跨批次键级合并：每个批次独立折叠，快照只反映当前批次；跨批次的复活检测需要把历史
-  状态一起纳入，属于下一期。
 - 事务边界未建模：同一事务的多条变更不保证原子可见。
 - 中文数字、货币符号（`￥`）不在金额归一范围内，遇到直接按类型错误隔离。
+- M8 连续状态按当前规则版本折叠；规则版本升级后的历史状态迁移需要单独的重放流程。

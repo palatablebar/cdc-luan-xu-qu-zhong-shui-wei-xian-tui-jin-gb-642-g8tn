@@ -15,9 +15,10 @@ def api_conflicts(ctx: Ctx = Depends(get_ctx)) -> dict:
     if batch is None:
         return {"batch_id": None, "counters": {}, "conflicts": [], "quarantine": []}
     rows = ctx.store.load_events(batch["batch_id"])
-    conflicts = [r for r in rows if r["row_class"] == "conflict"]
+    conflicts = [r for r in rows if r["row_class"] in ("conflict", "cross_conflict")]
     quarantine = [r for r in rows if r["row_class"] == "quarantine"]
-    duplicates = [r for r in rows if r["row_class"] == "duplicate"]
+    duplicates = [r for r in rows
+                  if r["row_class"] in ("duplicate", "cross_duplicate")]
     return {
         "batch_id": batch["batch_id"],
         "counters": {"applied": sum(1 for r in rows if r["row_class"] == "applied"),
@@ -26,7 +27,8 @@ def api_conflicts(ctx: Ctx = Depends(get_ctx)) -> dict:
         "conflicts": [_row(r) for r in conflicts],
         "quarantine": [_row(r) for r in quarantine],
         "duplicates": [_row(r) for r in duplicates],
-        "groups": conflict.conflict_groups_from_rows(conflicts),
+        "groups": conflict.conflict_groups_from_rows(
+            [r for r in conflicts if r["row_class"] == "conflict"]),
         "distribution": service.distribution_from_rows(rows),
         "priority": service.rule_table(),
     }
@@ -39,12 +41,14 @@ def page_conflicts(request: Request, ctx: Ctx = Depends(get_ctx)):
         "inputs": [], "events": [], "snapshot": [], "watermarks": [],
         "stages": [], "totals": {}}
     rows = layers["events"]
-    conflicts = [r for r in rows if r["row_class"] == "conflict"]
+    conflicts = [r for r in rows if r["row_class"] in ("conflict", "cross_conflict")]
     quarantine = [r for r in rows if r["row_class"] == "quarantine"]
-    duplicates = [r for r in rows if r["row_class"] == "duplicate"]
+    duplicates = [r for r in rows
+                  if r["row_class"] in ("duplicate", "cross_duplicate")]
     return render(request, "conflicts.html", batch=batch, page="conflicts",
                   conflicts=conflicts, quarantine=quarantine, duplicates=duplicates,
-                  groups=conflict.conflict_groups_from_rows(conflicts),
+                  groups=conflict.conflict_groups_from_rows(
+                      [r for r in conflicts if r["row_class"] == "conflict"]),
                   distribution=service.distribution_from_rows(rows),
                   priority=service.rule_table(),
                   dup_groups=_dup_groups(duplicates),

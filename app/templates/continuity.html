@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>连续结果（跨批次）</h1>
+    <p class="panel-sub">as_of {{ summary.as_of | localdt }} · {{ summary.keys_total | num }} 个连续键 · 页面与导出同一份结果</p>
+  </div>
+  <div class="panel-body">
+    <div class="actions">
+      <a class="btn" href="/api/export/continuity.csv">导出连续 CSV</a>
+      <a class="btn" href="/api/export/continuity.json">导出连续 JSON</a>
+      <span class="hint">重叠变更按版本序裁决：跨批重复不新增、跨批冲突不覆盖、既有键不丢失</span>
+    </div>
+  </div>
+</section>
+
+<div class="split">
+  <aside class="rail" aria-label="连续结果计数">
+    <dl>
+      <div class="row"><dt class="key">连续键总数</dt><dd class="value">{{ summary.keys_total | num }}</dd></div>
+      <div class="row"><dt class="key">快照键</dt><dd class="value">{{ summary.snapshot_keys | num }}</dd></div>
+      <div class="row"><dt class="key">活跃</dt><dd class="value is-ok">{{ summary.active_keys | num }}</dd></div>
+      <div class="row"><dt class="key">墓碑</dt><dd class="value is-bad">{{ summary.tombstone_keys | num }}</dd></div>
+      <div class="row"><dt class="key">待定</dt><dd class="value is-warn">{{ summary.pending_keys | num }}</dd></div>
+      <div class="row"><dt class="key">连续金额</dt><dd class="value">{{ summary.amount_applied | dec }}</dd></div>
+      <div class="row"><dt class="key">快照金额</dt><dd class="value">{{ summary.amount_snapshot | dec }}</dd></div>
+      <div class="row"><dt class="key">待定金额</dt><dd class="value is-warn">{{ summary.amount_pending | dec }}</dd></div>
+    </dl>
+    <dl style="margin-top:14px">
+      <div class="row"><dt class="key">跨批重复（不新增）</dt><dd class="value is-warn">{{ counters.cross_duplicate | num }}</dd></div>
+      <div class="row"><dt class="key">跨批乱序（不覆盖）</dt><dd class="value is-bad">{{ counters.cross_order | num }}</dd></div>
+      <div class="row"><dt class="key">跨批版本冲突</dt><dd class="value is-bad">{{ counters.cross_conflict | num }}</dd></div>
+      <div class="row"><dt class="key">本批采信进连续</dt><dd class="value is-ok">{{ counters.continuity_applied | num }}</dd></div>
+      <div class="row"><dt class="key">保留的既有键</dt><dd class="value">{{ counters.keys_kept | num }}</dd></div>
+    </dl>
+  </aside>
+
+  <div class="stack">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>连续对账</h2>
+        <p class="panel-sub">{{ reconcile | length }} 条</p>
+      </div>
+      <div class="panel-body tight">
+        <div class="table-wrap">
+          <table class="grid">
+            <thead><tr><th>账</th><th>左</th><th class="num">值</th><th>右</th><th class="num">值</th><th>结论</th></tr></thead>
+            <tbody>
+              {% for row in reconcile %}
+              <tr>
+                <td>{{ row.name }}</td>
+                <td>{{ row.left }}</td>
+                <td class="num">{{ (row.left_value | num) if row.kind == "count" else (row.left_value | dec) }}</td>
+                <td>{{ row.right }}</td>
+                <td class="num">{{ (row.right_value | num) if row.kind == "count" else (row.right_value | dec) }}</td>
+                <td><span class="balance {% if not row.ok %}is-bad{% endif %}">{{ "平" if row.ok else "不平" }}</span></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>连续键状态</h2>
+        <p class="panel-sub">显示 {{ rows | length }} / {{ total_rows }} 行</p>
+      </div>
+      <div class="panel-body tight">
+        <div class="table-wrap">
+          <table class="grid" data-sortable>
+            <thead><tr><th>表</th><th>主键</th><th class="num">版本</th><th>状态</th><th class="num">金额(元)</th><th class="num">数量</th><th>事件时间</th><th>行号引用</th><th>迟到</th><th>更新批次</th></tr></thead>
+            <tbody>
+              {% for row in rows %}
+              <tr>
+                <td>{{ row.table }}</td>
+                <td class="mono">{{ row.pk }}</td>
+                <td class="num">{{ row.version }}</td>
+                <td><span class="state state-{{ row.kind }}">{{ row.kind | snap }}</span></td>
+                <td class="num">{{ row.amount | dec }}</td>
+                <td class="num">{{ row.qty if row.qty is not none else '—' }}</td>
+                <td class="mono nowrap">{{ row.event_time | localdt }}</td>
+                <td class="mono nowrap">{{ row.row_ref }}</td>
+                <td>{{ "是" if row.late else "否" }}</td>
+                <td class="mono">{{ row.latest_batch }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if not rows %}<p class="empty">还没有连续结果，先采信一次。</p>{% endif %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

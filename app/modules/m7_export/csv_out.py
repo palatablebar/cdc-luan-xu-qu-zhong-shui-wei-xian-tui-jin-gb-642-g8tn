@@ -18,6 +18,9 @@ QUARANTINE_COLUMNS = ("行号引用", "表", "主键", "字段", "原值", "原�
 CONFLICT_COLUMNS = ("行号引用", "键", "版本", "操作", "事件时间(UTC)", "原因码", "明细")
 SNAPSHOT_COLUMNS = ("表", "主键", "版本", "状态", "金额(元)", "数量",
                     "事件时间(UTC)", "行号引用", "迟到", "待定")
+CONTINUITY_COLUMNS = ("表", "主键", "版本", "状态", "金额(元)", "数量",
+                      "事件时间(UTC)", "行号引用", "迟到", "待定",
+                      "首见批次", "更新批次")
 
 
 def to_csv(columns: tuple[str, ...], rows: list[list]) -> str:
@@ -78,5 +81,21 @@ def snapshot_rows(rows: list[dict]) -> list[list]:
             "" if row.get("amount") is None else str(row["amount"]),
             row.get("qty"), row["event_time_utc"], row["row_ref"],
             "是" if row.get("late") else "否", "是" if row.get("pending") else "否",
+        ])
+    return out
+
+
+def continuity_rows(rows: list[dict]) -> list[list]:
+    """连续结果导出行：比批内快照多两列来源批次，证明每个键从哪份导出采信。"""
+    out = []
+    for row in rows:
+        out.append([
+            row["table"], row["pk"], row["version"],
+            {"active": "活跃", "tombstone": "墓碑", "pending": "待定"}.get(
+                row.get("kind"), row.get("op") or "活跃"),
+            "" if row.get("amount") is None else str(row["amount"]),
+            row.get("qty"), row["event_time"], row["row_ref"],
+            "是" if row.get("late") else "否", "是" if row.get("pending") else "否",
+            row.get("first_batch") or "", row.get("latest_batch") or "",
         ])
     return out

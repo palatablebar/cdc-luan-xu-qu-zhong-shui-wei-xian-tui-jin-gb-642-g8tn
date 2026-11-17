@@ -17,6 +17,10 @@ DATASETS = {
     "manifest": {"label": "运行清单", "filename": "manifest.json", "columns": ()},
     "snapshot_json": {"label": "快照 JSON", "filename": "snapshot.json",
                       "columns": ()},
+    "continuity": {"label": "连续结果", "filename": "continuity.csv",
+                   "columns": csv_out.CONTINUITY_COLUMNS},
+    "continuity_json": {"label": "连续结果 JSON", "filename": "continuity.json",
+                        "columns": ()},
 }
 
 
@@ -34,7 +38,8 @@ def rows_for(store, batch_id: str, kind: str) -> list[list]:
     if kind == "quarantine":
         return csv_out.quarantine_rows([r for r in rows if r["row_class"] == "quarantine"])
     if kind == "conflicts":
-        return csv_out.conflict_rows([r for r in rows if r["row_class"] == "conflict"])
+        return csv_out.conflict_rows(
+            [r for r in rows if r["row_class"] in ("conflict", "cross_conflict")])
     if kind == "snapshot":
         return csv_out.snapshot_rows(store.load_snapshot(batch_id))
     raise errors.BadRequest(f"未知导出集 {kind!r}", code="E_BAD_DATASET")
@@ -72,10 +77,13 @@ def catalog(store, batch_id: str | None = None) -> list[dict]:
     counts = {
         "events": len(rows),
         "quarantine": sum(1 for r in rows if r["row_class"] == "quarantine"),
-        "conflicts": sum(1 for r in rows if r["row_class"] == "conflict"),
+        "conflicts": sum(1 for r in rows
+                         if r["row_class"] in ("conflict", "cross_conflict")),
         "snapshot": len(store.load_snapshot(batch["batch_id"])),
         "manifest": 1,
         "snapshot_json": 1,
+        "continuity": len(store.load_continuity_states()),
+        "continuity_json": 1,
     }
     out = []
     for key, meta in DATASETS.items():

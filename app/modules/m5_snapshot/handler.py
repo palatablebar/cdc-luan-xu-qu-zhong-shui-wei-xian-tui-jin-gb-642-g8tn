@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 
 from ...web import Ctx, get_ctx, render
+from ..m8_continuity import service as m8_service
 from . import service
 
 router = APIRouter(tags=["M5 快照物化"])
@@ -60,6 +61,8 @@ def page_snapshot(request: Request, ctx: Ctx = Depends(get_ctx)):
                   if batch else [],
                   reconcile=service.reconcile_rows(ctx.store, batch["batch_id"])
                   if batch else [],
+                  continuity=(m8_service.continuity_document(ctx.store)
+                              if batch else None),
                   window_rows=service.window_rows(),
                   totals=layers["totals"], inputs=layers["inputs"],
                   page_title="快照")

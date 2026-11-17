@@ -27,16 +27,17 @@ MONEY_UNIT = "元"
 # 迟到窗口：水位线 = 已应用事件最大 event_time − 该窗口
 LATE_WINDOW_MINUTES = 10
 
-STAGES = ("ingest", "contract", "dedup", "watermark", "snapshot", "export")
+STAGES = ("ingest", "contract", "dedup", "watermark", "snapshot", "continuity", "export")
 STAGE_LABELS = {
     "ingest": "采信",
     "contract": "契约",
     "dedup": "去重冲突",
     "watermark": "水位迟到",
     "snapshot": "快照",
+    "continuity": "连续状态",
     "export": "导出",
 }
-STAGE_FLOW = "采信 → 契约 → 去重冲突 → 水位迟到 → 快照 → 导出"
+STAGE_FLOW = "采信 → 契约 → 去重冲突 → 水位迟到 → 快照 → 连续状态 → 导出"
 
 # 编码回退链：先按声明尝试，再按严格顺序逐个试；gb18030 是 gbk/gb2312 的超集
 ENCODING_CHAIN = ("utf-8", "gb18030")
@@ -98,6 +99,7 @@ SOURCES = {
     "main": ("events_main.jsonl",),
     "v1_csv": ("events_v1_gb.csv",),
     "late": ("events_late.jsonl",),
+    "handoff": ("events_handoff.jsonl",),
 }
 SOURCE_ORDER = ("events_main.jsonl", "events_v1_gb.csv", "events_late.jsonl")
 SOURCE_LABELS = {
@@ -105,6 +107,7 @@ SOURCE_LABELS = {
     "main": "主文件 events_main.jsonl",
     "v1_csv": "旧列名 events_v1_gb.csv",
     "late": "迟到补丁 events_late.jsonl",
+    "handoff": "早班交接 events_handoff.jsonl（带两小时重叠）",
 }
 
 CSV_COLUMNS = ("table", "pk", "version", "op", "event_time", "schema",
